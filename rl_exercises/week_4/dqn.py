@@ -4,8 +4,11 @@ Deep Q-Learning implementation.
 
 from typing import Any, Dict, List, Tuple
 
+import os
+
 import gymnasium as gym
 import hydra
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -131,11 +134,11 @@ class DQNAgent(AbstractAgent):
         float
             Exploration rate.
         """
-        # TODO: implement exponential‐decayin
-        # ε = ε_final + (ε_start - ε_final) * exp(-total_steps / ε_decay)
-        # Currently, it is constant and returns the starting value ε
 
-        return self.epsilon_start
+        # ε = ε_final + (ε_start - ε_final) * exp(-total_steps / ε_decay)
+        return self.epsilon_final + (self.epsilon_start - self.epsilon_final) * np.exp(
+            -self.total_steps / self.epsilon_decay
+        )
 
     def predict_action(
         self, state: np.ndarray, evaluate: bool = False
@@ -159,18 +162,16 @@ class DQNAgent(AbstractAgent):
             Empty dict (compatible with interface).
         """
         if evaluate:
-            # TODO: select purely greedy action from Q(s)
             with torch.no_grad():
-                qvals = ...  # noqa: F841
+                qvals = self.q(torch.tensor(state, dtype=torch.float32))  # noqa: F841
 
-            action = None
+            action = int(torch.argmax(qvals).item())
         else:
             if np.random.rand() < self.epsilon():
-                # TODO: sample random action
-                action = None
+                action = self.env.action_space.sample()
             else:
-                # TODO: select purely greedy action from Q(s)
-                action = None
+                qvals = self.q(torch.tensor(state, dtype=torch.float32))
+                action = int(torch.argmax(qvals).item())
 
         return action
 
@@ -228,12 +229,17 @@ class DQNAgent(AbstractAgent):
         s_next = torch.tensor(np.array(next_states), dtype=torch.float32)  # noqa: F841
         mask = torch.tensor(np.array(dones), dtype=torch.float32)  # noqa: F841
 
-        # # TODO: pass batched states through self.q and gather Q(s,a)
-        pred = ...
+        ## Gather Q(s,a)
+        pred = self.q(s).gather(1, a)
 
-        # TODO: compute TD target with frozen network
+        # compute TD target with frozen network
         with torch.no_grad():
-            target = ...
+            next_qvals = self.target_q(s_next)
+            max_next_qvals = next_qvals.max(dim=1, keepdim=True)[0]  # [batch_size, 1]
+
+            target = (
+                r.unsqueeze(1) + (1 - mask.unsqueeze(1)) * self.gamma * max_next_qvals
+            )
 
         loss = nn.MSELoss()(pred, target)
 
@@ -263,6 +269,7 @@ class DQNAgent(AbstractAgent):
         state, _ = self.env.reset()
         ep_reward = 0.0
         recent_rewards: List[float] = []
+        rewards_avg = []
 
         for frame in range(1, num_frames + 1):
             action = self.predict_action(state)
@@ -275,8 +282,7 @@ class DQNAgent(AbstractAgent):
 
             # update if ready
             if len(self.buffer) >= self.batch_size:
-                # TODO: sample a batch from replay buffer
-                batch = ...
+                batch = self.buffer.sample(self.batch_size)
                 _ = self.update_agent(batch)
 
             if done or truncated:
@@ -285,13 +291,48 @@ class DQNAgent(AbstractAgent):
                 ep_reward = 0.0
                 # logging
                 if len(recent_rewards) % 10 == 0:
-                    # TODO: compute avg over last eval_interval episodes and print
-                    avg = ...
+                    avg = np.mean(recent_rewards[-10:])
                     print(
                         f"Frame {frame}, AvgReward(10): {avg:.2f}, ε={self.epsilon():.3f}"
                     )
+                    rewards_avg.append((frame, avg))
 
         print("Training complete.")
+
+        # plotting
+        if len(rewards_avg) > 0:
+            os.makedirs("plots", exist_ok=True)
+            layers = [m for m in self.q.net if isinstance(m, nn.Linear)]
+            hidden_sizes = [layer.out_features for layer in layers[0:-1]]
+
+            arch_str = f"{'x'.join(str(h) for h in hidden_sizes)}"
+            buf = f"buf{self.buffer.capacity // 1000}k"
+            bs = f"bs{self.batch_size}"
+            filename = f"arch{arch_str}_{buf}_{bs}.png"
+            filepath = os.path.join("plots", filename)
+
+            frames, rewards = zip(*rewards_avg)
+            plt.plot(frames, rewards)
+            info_text = (
+                f"Arch: {arch_str}\n"
+                f"Buffer: {self.buffer.capacity}\n"
+                f"Batch size: {self.batch_size}\n"
+            )
+            plt.xlabel("Frame")
+            plt.ylabel("Average Reward (10 episodes)")
+            plt.title("Training Curve")
+            plt.grid(True)
+            plt.text(
+                0.05,
+                0.95,
+                info_text,
+                transform=plt.gca().transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                bbox=dict(facecolor="white", alpha=0.8),
+            )
+            plt.savefig(filepath)
+            plt.close()
 
 
 @hydra.main(config_path="../configs/agent/", config_name="dqn", version_base="1.1")
@@ -300,9 +341,9 @@ def main(cfg: DictConfig):
     env = gym.make(cfg.env.name)
     set_seed(env, cfg.seed)
 
-    # 3) TODO: instantiate & train the agent
-    agent = ...
-    agent.train(...)
+    # 3)instantiate & train the agent
+    agent = DQNAgent(env, **cfg.agent)
+    agent.train(cfg.train.num_frames, cfg.train.eval_interval)
 
 
 if __name__ == "__main__":
