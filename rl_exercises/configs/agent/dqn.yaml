@@ -2,12 +2,12 @@
 env:
   name: CartPole-v1
 
-seed: 0
+seed: [0,1,2]
 
 agent:
   buffer_capacity:    10000    # max replay buffer size
   batch_size:         32       # minibatch size
-  learning_rate:      0.001    # maps to DQNAgent’s lr
+  lr:      0.001    # maps to DQNAgent’s lr
   gamma:              0.99
   epsilon_start:      1.0
   epsilon_final:      0.01

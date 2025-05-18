@@ -13,6 +13,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from numpy import floating
 from omegaconf import DictConfig
 from rl_exercises.agent import AbstractAgent
 from rl_exercises.week_4.buffers import ReplayBuffer
@@ -255,7 +256,9 @@ class DQNAgent(AbstractAgent):
         self.total_steps += 1
         return float(loss.item())
 
-    def train(self, num_frames: int, eval_interval: int = 1000) -> None:
+    def train(
+        self, num_frames: int, eval_interval: int = 1000
+    ) -> list[tuple[int, floating[Any]]]:
         """
         Run a training loop for a fixed number of frames.
 
@@ -299,51 +302,80 @@ class DQNAgent(AbstractAgent):
 
         print("Training complete.")
 
-        # plotting
-        if len(rewards_avg) > 0:
-            os.makedirs("plots", exist_ok=True)
-            layers = [m for m in self.q.net if isinstance(m, nn.Linear)]
-            hidden_sizes = [layer.out_features for layer in layers[0:-1]]
-
-            arch_str = f"{'x'.join(str(h) for h in hidden_sizes)}"
-            buf = f"buf{self.buffer.capacity // 1000}k"
-            bs = f"bs{self.batch_size}"
-            filename = f"arch{arch_str}_{buf}_{bs}.png"
-            filepath = os.path.join("plots", filename)
-
-            frames, rewards = zip(*rewards_avg)
-            plt.plot(frames, rewards)
-            info_text = (
-                f"Arch: {arch_str}\n"
-                f"Buffer: {self.buffer.capacity}\n"
-                f"Batch size: {self.batch_size}\n"
-            )
-            plt.xlabel("Frame")
-            plt.ylabel("Average Reward (10 episodes)")
-            plt.title("Training Curve")
-            plt.grid(True)
-            plt.text(
-                0.05,
-                0.95,
-                info_text,
-                transform=plt.gca().transAxes,
-                fontsize=10,
-                verticalalignment="top",
-                bbox=dict(facecolor="white", alpha=0.8),
-            )
-            plt.savefig(filepath)
-            plt.close()
+        return rewards_avg
 
 
 @hydra.main(config_path="../configs/agent/", config_name="dqn", version_base="1.1")
 def main(cfg: DictConfig):
-    # 1) build env
-    env = gym.make(cfg.env.name)
-    set_seed(env, cfg.seed)
+    all_curves = []
+    arch_str = None
+    buf_str = None
+    bs_str = None
 
-    # 3)instantiate & train the agent
-    agent = DQNAgent(env, **cfg.agent)
-    agent.train(cfg.train.num_frames, cfg.train.eval_interval)
+    for seed in cfg.seed:
+        print(f"\n RUN seed={seed}")
+        env = gym.make(cfg.env.name)
+        set_seed(env, seed)
+
+        agent = DQNAgent(env, **cfg.agent)
+
+        if arch_str is None:
+            layers = [m for m in agent.q.net if isinstance(m, nn.Linear)]
+            hidden_sizes = [layer.out_features for layer in layers[:-1]]
+            arch_str = "x".join(str(h) for h in hidden_sizes)
+            buf_str = f"buf{agent.buffer.capacity // 1000}k"
+            bs_str = f"bs{agent.batch_size}"
+
+        curve = agent.train(cfg.train.num_frames, cfg.train.eval_interval)
+        all_curves.append(curve)
+
+    min_len = min(len(curve) for curve in all_curves)
+    frames = [pt[0] for pt in all_curves[0][:min_len]]
+
+    # compute mean and standard deviation
+    means = []
+    stds = []
+    for i in range(min_len):
+        vals = [curve[i][1] for curve in all_curves]
+        means.append(np.mean(vals))
+        stds.append(np.std(vals))
+
+    # plots
+    os.makedirs("../../../plots", exist_ok=True)
+    plt.plot(frames, means, label="mean over seeds")
+    plt.fill_between(
+        frames,
+        np.array(means) - np.array(stds),
+        np.array(means) + np.array(stds),
+        alpha=0.3,
+        label="standard deviation",
+    )
+    plt.xlabel("Frame")
+    plt.ylabel("Average Reward (10 episode window)")
+    plt.title(f"DQN on {cfg.env.name}")
+    plt.legend()
+    plt.grid(True)
+
+    info_text = (
+        f"Arch: {arch_str}\n"
+        f"Buffer: {agent.buffer.capacity}\n"
+        f"Batch size: {agent.batch_size}\n"
+    )
+    plt.text(
+        0.05,
+        0.95,
+        info_text,
+        transform=plt.gca().transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=dict(facecolor="white", alpha=0.8),
+    )
+
+    filename = f"arch{arch_str}_{buf_str}_{bs_str}.png"
+    filepath = os.path.join("../../../plots", filename)
+    plt.savefig(filepath)
+    plt.show()
+    plt.close()
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
-Experiments:
+Experiments (averaged over 3 seeds; results reported as mean ± std)
     - Width: 32, 64, 256
     - Depth: 1 layer (64), 2 layers (64x64), 3 layers (64x64x64)
     - Buffer size: 1k, 10k, 50k
     - Batch size: 16, 32, 128
 
-This experiments show that larger networks (256×256) learn faster but can become unstable, while smaller networks are more stable but slower in achieving higher performance.
+This experiments show that larger networks (256×256) learn faster but can become unstable (high seed-to-seed variability), while smaller networks are more stable but slower in achieving higher performance.
 Adding more layers does not significantly alter the results and may even increase instability. Surprisingly, small networks (one hidden layer) can perform well and possibly generalize better in simple environments like CartPole.
 Smaller buffers can cause instability due to a lack of diverse experiences, whereas very large buffers slow down learning but improving stability.
 Small batches (16) lead to faster but noisier learning, while big batches (128) are smoother but slow to adapt.
